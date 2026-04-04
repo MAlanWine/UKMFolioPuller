@@ -1,3 +1,10 @@
+# Project-specific excludes
+.claude/
+config.json
+moodleAPIDoc.md
+projectplan.md
+*.db
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
