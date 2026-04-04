@@ -1,4 +1,4 @@
-# UKMFolio Checker
+# UKMFolioPuller
 
 Monitor UKMFolio (Moodle) for new/changed assignments and quizzes, get notified via Telegram.
 
@@ -43,5 +43,5 @@ This program is designed to run as a periodic job rather than a long-running dae
 crontab -e
 ```
 ```
-*/30 * * * * cd /path/to/UKMFolioChecker && /path/to/python main.py >> checker.log 2>&1
+*/30 * * * * cd /path/to/UKMFolioPuller && /path/to/python main.py >> checker.log 2>&1
 ```

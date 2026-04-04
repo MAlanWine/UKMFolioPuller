@@ -3,7 +3,9 @@
 config.json
 moodleAPIDoc.md
 projectplan.md
+project_information.md
 *.db
+checker.log
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,4 +1,4 @@
-"""UKMFolio Checker - main entry point"""
+"""UKMFolioPuller - main entry point"""
 
 import argparse
 import sys
