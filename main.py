@@ -6,10 +6,11 @@ import time
 from datetime import datetime, timezone
 
 from auth import load_config, login
-from db import init_db, upsert_courses, get_all_items, get_course_info, \
+from db import init_db, upsert_courses, get_all_items, \
     insert_items, update_item, delete_items
 from moodle import get_enrolled_courses, get_action_events
-from notifier import notify_new_item, notify_changed_item
+from notifier import notify_new_item, notify_changed_item, \
+    send_message, build_check_message, print_new_item, print_changed_item
 
 
 def check_config(config: dict, need_telegram: bool = True):
@@ -53,9 +54,9 @@ def detect_changes(api_items: list[dict], db_items: dict[int, dict]):
     return new_items, changed_items, deleted_ids
 
 
-def cmd_check(config: dict):
-    """List assignments/quizzes due within the next 7 days to stdout."""
-    check_config(config, need_telegram=False)
+def cmd_check(config: dict, use_tgbot: bool = False):
+    """List assignments/quizzes due within the next 7 days."""
+    check_config(config, need_telegram=use_tgbot)
     base_url = config["base_url"]
 
     session, sesskey = login(config)
@@ -73,42 +74,51 @@ def cmd_check(config: dict):
     upcoming = [i for i in api_items if i.get("deadline") and now <= i["deadline"] <= one_week]
     upcoming.sort(key=lambda i: i["deadline"])
 
-    if not upcoming:
-        print("No assignments/quizzes due within the next 7 days.")
-        return
-
-    print(f"{'Deadline':^20s} | {'Type':^6s} | {'Course':^12s} | Title")
-    print("-" * 80)
-    for item in upcoming:
-        dl = datetime.fromtimestamp(item["deadline"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-        days_left = (item["deadline"] - now) / 86400
-        course = course_map.get(item["belongs_to"], {})
-        shortname = course.get("course_shortname", "?")
-        tag = f"({days_left:.1f}d left)"
-        print(f"{dl} {tag:>11s} | {item['item_type']:^6s} | {shortname:^12s} | {item['item_title']}")
+    if use_tgbot:
+        bot_token = config["telegram_bot_token"]
+        chat_id = config["telegram_target_user_uuid"]
+        msg = build_check_message(upcoming, course_map)
+        send_message(bot_token, chat_id, msg)
+    else:
+        if not upcoming:
+            print("No assignments/quizzes due within the next 7 days.")
+            return
+        print(f"{'Deadline':^20s} | {'Type':^6s} | {'Course':^12s} | Title")
+        print("-" * 80)
+        for item in upcoming:
+            dl = datetime.fromtimestamp(item["deadline"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+            days_left = (item["deadline"] - now) / 86400
+            course = course_map.get(item["belongs_to"], {})
+            shortname = course.get("course_shortname", "?")
+            tag = f"({days_left:.1f}d left)"
+            print(f"{dl} {tag:>11s} | {item['item_type']:^6s} | {shortname:^12s} | {item['item_title']}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="UKMFolio Assignment Checker")
-    parser.add_argument("command", nargs="?", default=None,
-                        help="Subcommand: 'check' to list upcoming deadlines")
+    parser.add_argument("--check", action="store_true",
+                        help="List upcoming deadlines (within 7 days)")
+    parser.add_argument("--tgbot", action="store_true",
+                        help="Send output to Telegram instead of stdout")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Show changes without writing to database")
     parser.add_argument("--initct", action="store_true",
                         help="Init Content: first run, populate DB without sending notifications")
     args = parser.parse_args()
 
-    if args.command == "check":
-        config = load_config()
-        cmd_check(config)
+    config = load_config()
+
+    if args.check:
+        cmd_check(config, use_tgbot=args.tgbot)
         return
 
     # 1. Load config
     print("[*] Loading config...")
-    config = load_config()
-    check_config(config, need_telegram=not args.initct)
+    check_config(config, need_telegram=args.tgbot)
 
-    bot_token = config["telegram_bot_token"]
-    chat_id = config["telegram_target_user_uuid"]
     base_url = config["base_url"]
+    bot_token = config.get("telegram_bot_token")
+    chat_id = config.get("telegram_target_user_uuid")
 
     # 2. Initialize database
     print("[*] Initializing database...")
@@ -129,8 +139,10 @@ def main():
     if not courses:
         print("[WARN] No enrolled courses found.")
         sys.exit(0)
-    upsert_courses(courses)
-    course_ids = [c["course_id"] for c in courses]
+    if not args.dry_run:
+        upsert_courses(courses)
+    course_map = {c["course_id"]: c for c in courses}
+    course_ids = list(course_map.keys())
     print(f"[*] Found {len(courses)} courses.")
 
     # 5. Fetch action events
@@ -145,33 +157,45 @@ def main():
     print(f"[*] Changes: {len(new_items)} new, {len(changed_items)} changed, "
           f"{len(deleted_ids)} removed.")
 
+    if args.dry_run:
+        print("[*] Dry run — skipping database writes.")
+
     # 7. Handle new items
     if new_items:
-        insert_items(new_items)
+        if not args.dry_run:
+            insert_items(new_items)
         if not args.initct:
             for item in new_items:
-                course = get_course_info(item["belongs_to"])
+                course = course_map.get(item["belongs_to"])
                 if course:
-                    try:
-                        notify_new_item(bot_token, chat_id, item, course)
-                    except Exception as e:
-                        print(f"[WARN] Failed to send notification: {e}")
+                    if args.tgbot:
+                        try:
+                            notify_new_item(bot_token, chat_id, item, course)
+                        except Exception as e:
+                            print(f"[WARN] Failed to send notification: {e}")
+                    else:
+                        print_new_item(item, course)
 
     # 8. Handle changed items
     if changed_items:
         for item, changes in changed_items:
-            update_item(item)
+            if not args.dry_run:
+                update_item(item)
             if not args.initct:
-                course = get_course_info(item["belongs_to"])
+                course = course_map.get(item["belongs_to"])
                 if course:
-                    try:
-                        notify_changed_item(bot_token, chat_id, item, course, changes)
-                    except Exception as e:
-                        print(f"[WARN] Failed to send notification: {e}")
+                    if args.tgbot:
+                        try:
+                            notify_changed_item(bot_token, chat_id, item, course, changes)
+                        except Exception as e:
+                            print(f"[WARN] Failed to send notification: {e}")
+                    else:
+                        print_changed_item(item, course, changes)
 
     # 9. Handle deleted items
     if deleted_ids:
-        delete_items(deleted_ids)
+        if not args.dry_run:
+            delete_items(deleted_ids)
 
     print("[*] Done.")
 

@@ -1,5 +1,6 @@
 """Telegram notification module"""
 
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -82,3 +83,48 @@ def notify_changed_item(bot_token: str, chat_id: str, item: dict,
                         course: dict, changes: list[str]):
     msg = _build_changed_item_message(item, course, changes)
     send_message(bot_token, chat_id, msg)
+
+
+def build_check_message(upcoming: list[dict], course_map: dict) -> str:
+    """Build Telegram MarkdownV2 message for upcoming deadlines."""
+    if not upcoming:
+        return _escape_md("No assignments/quizzes due within the next 7 days.")
+    now = int(time.time())
+    lines = ["*Upcoming Deadlines \\(7 days\\)*\n"]
+    for item in upcoming:
+        dl = datetime.fromtimestamp(item["deadline"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        days_left = (item["deadline"] - now) / 86400
+        course = course_map.get(item["belongs_to"], {})
+        shortname = course.get("course_shortname", "?")
+        title = _escape_md(item["item_title"])
+        tag = f"({days_left:.1f}d left)"
+        lines.append(
+            f"\\- {_escape_md(dl)} {_escape_md(tag)} \\| "
+            f"{_escape_md(shortname)} \\| {title}"
+        )
+    return "\n".join(lines)
+
+
+def print_new_item(item: dict, course: dict):
+    """Print new item notification to stdout."""
+    print(
+        f"[New Assignment/Quiz]\n"
+        f"  Title:     {item['item_title']}\n"
+        f"  Type:      {item['item_type']}\n"
+        f"  Deadline:  {_format_deadline(item.get('deadline'))}\n"
+        f"  Course:    {course['course_shortname']} {course['course_name']}\n"
+        f"  Link:      {item['item_url']}"
+    )
+
+
+def print_changed_item(item: dict, course: dict, changes: list[str]):
+    """Print changed item notification to stdout."""
+    print(
+        f"[Content Changed]\n"
+        f"  Title:     {item['item_title']}\n"
+        f"  Type:      {item['item_type']}\n"
+        f"  Deadline:  {_format_deadline(item.get('deadline'))}\n"
+        f"  Course:    {course['course_shortname']} {course['course_name']}\n"
+        f"  Link:      {item['item_url']}\n"
+        f"  Changes:   {', '.join(changes)}"
+    )
