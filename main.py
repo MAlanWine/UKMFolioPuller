@@ -10,7 +10,7 @@ from db import init_db, upsert_courses, get_all_items, \
     insert_items, update_item, delete_items
 from moodle import get_enrolled_courses, get_action_events
 from notifier import notify_new_item, notify_changed_item, \
-    send_message, build_check_message, print_new_item, print_changed_item
+    notify_check_item, notify_no_upcoming
 
 
 def check_config(config: dict, need_telegram: bool = True):
@@ -77,8 +77,16 @@ def cmd_check(config: dict, use_tgbot: bool = False):
     if use_tgbot:
         bot_token = config["telegram_bot_token"]
         chat_id = config["telegram_target_user_uuid"]
-        msg = build_check_message(upcoming, course_map)
-        send_message(bot_token, chat_id, msg)
+        if not upcoming:
+            notify_no_upcoming(bot_token, chat_id)
+            return
+        for item in upcoming:
+            course = course_map.get(item["belongs_to"])
+            if course:
+                try:
+                    notify_check_item(bot_token, chat_id, item, course)
+                except Exception as e:
+                    print(f"[WARN] Failed to send notification: {e}")
     else:
         if not upcoming:
             print("No assignments/quizzes due within the next 7 days.")
@@ -160,37 +168,64 @@ def main():
     if args.dry_run:
         print("[*] Dry run — skipping database writes.")
 
+    now = int(time.time())
+
     # 7. Handle new items
     if new_items:
         if not args.dry_run:
             insert_items(new_items)
         if not args.initct:
-            for item in new_items:
-                course = course_map.get(item["belongs_to"])
-                if course:
-                    if args.tgbot:
+            if args.tgbot:
+                for item in new_items:
+                    course = course_map.get(item["belongs_to"])
+                    if course:
                         try:
                             notify_new_item(bot_token, chat_id, item, course)
                         except Exception as e:
                             print(f"[WARN] Failed to send notification: {e}")
+            else:
+                print(f"\n[*] New items ({len(new_items)}):")
+                print(f"  {'Deadline':^20s} | {'Type':^6s} | {'Course':^12s} | Title")
+                print("  " + "-" * 78)
+                for item in new_items:
+                    course = course_map.get(item["belongs_to"], {})
+                    shortname = course.get("course_shortname", "?")
+                    if item.get("deadline"):
+                        dl = datetime.fromtimestamp(item["deadline"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+                        days_left = (item["deadline"] - now) / 86400
+                        dl_str = f"{dl} ({days_left:.1f}d)"
                     else:
-                        print_new_item(item, course)
+                        dl_str = "No deadline"
+                    print(f"  {dl_str:<20s} | {item['item_type']:^6s} | {shortname:^12s} | {item['item_title']}")
 
     # 8. Handle changed items
     if changed_items:
-        for item, changes in changed_items:
-            if not args.dry_run:
+        if not args.dry_run:
+            for item, changes in changed_items:
                 update_item(item)
-            if not args.initct:
-                course = course_map.get(item["belongs_to"])
-                if course:
-                    if args.tgbot:
+        if not args.initct:
+            if args.tgbot:
+                for item, changes in changed_items:
+                    course = course_map.get(item["belongs_to"])
+                    if course:
                         try:
                             notify_changed_item(bot_token, chat_id, item, course, changes)
                         except Exception as e:
                             print(f"[WARN] Failed to send notification: {e}")
+            else:
+                print(f"\n[*] Changed items ({len(changed_items)}):")
+                print(f"  {'Deadline':^20s} | {'Type':^6s} | {'Course':^12s} | {'Title':<30s} | Changes")
+                print("  " + "-" * 100)
+                for item, changes in changed_items:
+                    course = course_map.get(item["belongs_to"], {})
+                    shortname = course.get("course_shortname", "?")
+                    if item.get("deadline"):
+                        dl = datetime.fromtimestamp(item["deadline"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+                        days_left = (item["deadline"] - now) / 86400
+                        dl_str = f"{dl} ({days_left:.1f}d)"
                     else:
-                        print_changed_item(item, course, changes)
+                        dl_str = "No deadline"
+                    print(f"  {dl_str:<20s} | {item['item_type']:^6s} | {shortname:^12s} | {item['item_title']:<30s} | {', '.join(changes)}")
 
     # 9. Handle deleted items
     if deleted_ids:

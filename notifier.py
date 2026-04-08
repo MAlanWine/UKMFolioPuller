@@ -85,46 +85,32 @@ def notify_changed_item(bot_token: str, chat_id: str, item: dict,
     send_message(bot_token, chat_id, msg)
 
 
-def build_check_message(upcoming: list[dict], course_map: dict) -> str:
-    """Build Telegram MarkdownV2 message for upcoming deadlines."""
-    if not upcoming:
-        return _escape_md("No assignments/quizzes due within the next 7 days.")
+def _build_check_item_message(item: dict, course: dict) -> str:
+    """Build Telegram message for a single upcoming deadline."""
+    title = _escape_md(item["item_title"])
+    itype = _escape_md(item["item_type"])
+    deadline = _escape_md(_format_deadline(item.get("deadline")))
+    course_info = _escape_md(f"{course['course_shortname']} {course['course_name']}")
     now = int(time.time())
-    lines = ["*Upcoming Deadlines \\(7 days\\)*\n"]
-    for item in upcoming:
-        dl = datetime.fromtimestamp(item["deadline"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-        days_left = (item["deadline"] - now) / 86400
-        course = course_map.get(item["belongs_to"], {})
-        shortname = course.get("course_shortname", "?")
-        title = _escape_md(item["item_title"])
-        tag = f"({days_left:.1f}d left)"
-        lines.append(
-            f"\\- {_escape_md(dl)} {_escape_md(tag)} \\| "
-            f"{_escape_md(shortname)} \\| {title}"
-        )
-    return "\n".join(lines)
+    days_left = (item["deadline"] - now) / 86400
+    days_str = _escape_md(f"({days_left:.1f} days left)")
+    url = item["item_url"]
 
-
-def print_new_item(item: dict, course: dict):
-    """Print new item notification to stdout."""
-    print(
-        f"[New Assignment/Quiz]\n"
-        f"  Title:     {item['item_title']}\n"
-        f"  Type:      {item['item_type']}\n"
-        f"  Deadline:  {_format_deadline(item.get('deadline'))}\n"
-        f"  Course:    {course['course_shortname']} {course['course_name']}\n"
-        f"  Link:      {item['item_url']}"
+    return (
+        f"*Upcoming Deadline*\n"
+        f"\\- Title:      {title}\n"
+        f"\\- Type:       {itype}\n"
+        f"\\- Deadline:  {deadline} {days_str}\n"
+        f"\\- Course:    {course_info}\n"
+        f"\\- Link:       [Open]({url})"
     )
 
 
-def print_changed_item(item: dict, course: dict, changes: list[str]):
-    """Print changed item notification to stdout."""
-    print(
-        f"[Content Changed]\n"
-        f"  Title:     {item['item_title']}\n"
-        f"  Type:      {item['item_type']}\n"
-        f"  Deadline:  {_format_deadline(item.get('deadline'))}\n"
-        f"  Course:    {course['course_shortname']} {course['course_name']}\n"
-        f"  Link:      {item['item_url']}\n"
-        f"  Changes:   {', '.join(changes)}"
-    )
+def notify_check_item(bot_token: str, chat_id: str, item: dict, course: dict):
+    msg = _build_check_item_message(item, course)
+    send_message(bot_token, chat_id, msg)
+
+
+def notify_no_upcoming(bot_token: str, chat_id: str):
+    msg = _escape_md("No assignments/quizzes due within the next 7 days.")
+    send_message(bot_token, chat_id, msg)
