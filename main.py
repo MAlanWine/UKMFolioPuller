@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from auth import load_config, login
 from db import init_db, upsert_courses, get_all_items, \
     insert_items, update_item, delete_items
+from filter import apply_filter
 from moodle import get_enrolled_courses, get_action_events
 from notifier import notify_new_item, notify_changed_item, \
     notify_check_item, notify_no_upcoming
@@ -22,6 +23,13 @@ def check_config(config: dict, need_telegram: bool = True):
     if missing:
         print(f"[ERROR] Missing fields in config.json: {', '.join(missing)}")
         sys.exit(1)
+    if need_telegram:
+        uuids = config.get("telegram_target_user_uuid")
+        if not isinstance(uuids, list) or not uuids or \
+                not all(isinstance(u, str) and u for u in uuids):
+            print("[ERROR] 'telegram_target_user_uuid' must be a non-empty "
+                  "array of chat-id strings in config.json")
+            sys.exit(1)
 
 
 def detect_changes(api_items: list[dict], db_items: dict[int, dict]):
@@ -68,6 +76,7 @@ def cmd_check(config: dict, use_tgbot: bool = False):
     course_map = {c["course_id"]: c for c in courses}
     course_ids = list(course_map.keys())
     api_items = get_action_events(session, sesskey, base_url, course_ids)
+    api_items = apply_filter(api_items, config.get("filter"))
 
     now = int(time.time())
     one_week = now + 7 * 24 * 3600
@@ -157,6 +166,7 @@ def main():
     print("[*] Fetching action events (assignments/quizzes)...")
     api_items = get_action_events(session, sesskey, base_url, course_ids)
     print(f"[*] Found {len(api_items)} action events.")
+    api_items = apply_filter(api_items, config.get("filter"))
 
     # 6. Detect changes
     db_items = get_all_items()

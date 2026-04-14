@@ -17,7 +17,45 @@ Monitor UKMFolio (Moodle) for new/changed assignments and quizzes, get notified 
        "base_url": "https://ukmfolio.ukm.my",
        "sso_url": "https://sso.ukm.my",
        "telegram_bot_token": "your_bot_token",
-       "telegram_target_user_uuid": "your_chat_id"
+       "telegram_target_user_uuid": ["your_chat_id", "another_chat_id"],
+       "filter": {
+           "mode": "Default",
+           "whitelist": [],
+           "blacklist": []
+       }
+   }
+   ```
+
+   ### Telegram targets
+
+   `telegram_target_user_uuid` is an **array** of chat-id strings. When
+   `--tgbot` is used, every notification is delivered to every chat id in the
+   list. A failure on one target does not block delivery to the others.
+
+   ### Title filter
+
+   The `filter` block controls which items (by `item_title`) are allowed
+   through to change detection and notification. Both `--tgbot` runs and
+   `--check` runs apply the same filter. Whitelist/blacklist entries are
+   **regular expressions** (a plain substring works too).
+
+   Modes:
+
+   | Mode        | Behavior                                                                                          |
+   | ----------- | ------------------------------------------------------------------------------------------------- |
+   | `Default`   | Pass if title matches any whitelist rule; drop if it matches any blacklist rule; otherwise pass.  |
+   | `BlackList` | Pass by default; drop only if title matches any blacklist rule.                                   |
+   | `WhiteList` | Drop by default; pass only if title matches any whitelist rule.                                   |
+   | `Disabled`  | Pass everything, no rules applied.                                                                |
+
+   Example — only notify for items belonging to your class, explicitly
+   excluding another class's assignments:
+
+   ```json
+   "filter": {
+       "mode": "Default",
+       "whitelist": ["TTTM2213", "Group\\s*A"],
+       "blacklist": ["Group\\s*B", "Kelas\\s*2"]
    }
    ```
 

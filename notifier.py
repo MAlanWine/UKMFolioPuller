@@ -57,21 +57,37 @@ def _build_changed_item_message(item: dict, course: dict, changes: list[str]) ->
     )
 
 
-def send_message(bot_token: str, chat_id: str, text: str):
-    """Send a MarkdownV2 message via Telegram Bot API."""
-    resp = requests.post(
-        f"https://api.telegram.org/bot{bot_token}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "MarkdownV2",
-            "disable_web_page_preview": True,
-        },
-    )
-    resp.raise_for_status()
-    result = resp.json()
-    if not result.get("ok"):
-        raise RuntimeError(f"Telegram API error: {result.get('description', 'unknown')}")
+def send_message(bot_token: str, chat_ids, text: str):
+    """Send a MarkdownV2 message via Telegram Bot API.
+
+    chat_ids accepts a single chat id (str/int) or a list of chat ids;
+    the message is delivered to every target.
+    """
+    if isinstance(chat_ids, (str, int)):
+        targets = [chat_ids]
+    else:
+        targets = list(chat_ids)
+
+    errors = []
+    for cid in targets:
+        try:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={
+                    "chat_id": cid,
+                    "text": text,
+                    "parse_mode": "MarkdownV2",
+                    "disable_web_page_preview": True,
+                },
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            if not result.get("ok"):
+                errors.append(f"{cid}: {result.get('description', 'unknown')}")
+        except Exception as e:
+            errors.append(f"{cid}: {e}")
+    if errors:
+        raise RuntimeError("Telegram API error(s): " + "; ".join(errors))
 
 
 def notify_new_item(bot_token: str, chat_id: str, item: dict, course: dict):
