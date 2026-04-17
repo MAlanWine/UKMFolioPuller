@@ -21,18 +21,25 @@ def _escape_md(text: str) -> str:
     return text
 
 
+def _new_header_and_date_label(item: dict) -> tuple[str, str]:
+    if item.get("item_type") == "forum":
+        return "*New Forum Post*", "Posted:    "
+    return "*New Assignment/Quiz*", "Deadline:  "
+
+
 def _build_new_item_message(item: dict, course: dict) -> str:
     title = _escape_md(item["item_title"])
     itype = _escape_md(item["item_type"])
-    deadline = _escape_md(_format_deadline(item.get("deadline")))
+    date_value = _escape_md(_format_deadline(item.get("deadline")))
     course_info = _escape_md(f"{course['course_shortname']} {course['course_name']}")
     url = item["item_url"]
+    header, date_label = _new_header_and_date_label(item)
 
     return (
-        f"*New Assignment/Quiz*\n"
+        f"{header}\n"
         f"\\- Title:      {title}\n"
         f"\\- Type:       {itype}\n"
-        f"\\- Deadline:  {deadline}\n"
+        f"\\- {date_label}{date_value}\n"
         f"\\- Course:    {course_info}\n"
         f"\\- Link:       [Open]({url})"
     )
@@ -41,16 +48,17 @@ def _build_new_item_message(item: dict, course: dict) -> str:
 def _build_changed_item_message(item: dict, course: dict, changes: list[str]) -> str:
     title = _escape_md(item["item_title"])
     itype = _escape_md(item["item_type"])
-    deadline = _escape_md(_format_deadline(item.get("deadline")))
+    date_value = _escape_md(_format_deadline(item.get("deadline")))
     course_info = _escape_md(f"{course['course_shortname']} {course['course_name']}")
     changes_str = _escape_md(", ".join(changes))
     url = item["item_url"]
+    _, date_label = _new_header_and_date_label(item)
 
     return (
         f"*Content Changed*\n"
         f"\\- Title:      {title}\n"
         f"\\- Type:       {itype}\n"
-        f"\\- Deadline:  {deadline}\n"
+        f"\\- {date_label}{date_value}\n"
         f"\\- Course:    {course_info}\n"
         f"\\- Link:       [Open]({url})\n"
         f"\\- Changes:  {changes_str}"

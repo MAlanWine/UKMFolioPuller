@@ -33,6 +33,17 @@ def init_db():
             belongs_to  INTEGER NOT NULL,
             FOREIGN KEY (belongs_to) REFERENCES tbl_courses(course_id)
         );
+
+        CREATE TABLE IF NOT EXISTS tbl_forum_discussions (
+            item_id     INTEGER PRIMARY KEY,
+            item_type   TEXT NOT NULL,
+            item_title  TEXT NOT NULL,
+            deadline    INTEGER,
+            item_url    TEXT NOT NULL,
+            belongs_to  INTEGER NOT NULL,
+            item_body   TEXT,
+            FOREIGN KEY (belongs_to) REFERENCES tbl_courses(course_id)
+        );
     """)
     conn.commit()
     conn.close()
@@ -98,6 +109,49 @@ def delete_items(item_ids: list[int]):
     conn = get_connection()
     conn.executemany(
         "DELETE FROM tbl_items WHERE item_id = ?",
+        [(i,) for i in item_ids],
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_all_forum_items() -> dict[int, dict]:
+    """Return {item_id: row_dict} for every stored forum discussion."""
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM tbl_forum_discussions").fetchall()
+    conn.close()
+    return {row["item_id"]: dict(row) for row in rows}
+
+
+def insert_forum_items(items: list[dict]):
+    conn = get_connection()
+    conn.executemany(
+        """INSERT INTO tbl_forum_discussions
+               (item_id, item_type, item_title, deadline, item_url, belongs_to, item_body)
+           VALUES (:item_id, :item_type, :item_title, :deadline, :item_url, :belongs_to, :item_body)""",
+        items,
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_forum_item(item: dict):
+    conn = get_connection()
+    conn.execute(
+        """UPDATE tbl_forum_discussions SET
+               item_type=:item_type, item_title=:item_title, deadline=:deadline,
+               item_url=:item_url, belongs_to=:belongs_to, item_body=:item_body
+           WHERE item_id=:item_id""",
+        item,
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_forum_items(item_ids: list[int]):
+    conn = get_connection()
+    conn.executemany(
+        "DELETE FROM tbl_forum_discussions WHERE item_id = ?",
         [(i,) for i in item_ids],
     )
     conn.commit()

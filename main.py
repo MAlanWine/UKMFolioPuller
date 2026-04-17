@@ -7,9 +7,12 @@ from datetime import datetime, timezone
 
 from auth import load_config, login
 from db import init_db, upsert_courses, get_all_items, \
-    insert_items, update_item, delete_items
+    insert_items, update_item, delete_items, \
+    get_all_forum_items, insert_forum_items, update_forum_item, \
+    delete_forum_items
 from filter import apply_filter
-from moodle import get_enrolled_courses, get_action_events
+from moodle import get_enrolled_courses, get_action_events, \
+    get_forum_discussions
 from notifier import notify_new_item, notify_changed_item, \
     notify_check_item, notify_no_upcoming
 
@@ -162,87 +165,135 @@ def main():
     course_ids = list(course_map.keys())
     print(f"[*] Found {len(courses)} courses.")
 
+    now = int(time.time())
+
     # 5. Fetch action events
     print("[*] Fetching action events (assignments/quizzes)...")
     api_items = get_action_events(session, sesskey, base_url, course_ids)
     print(f"[*] Found {len(api_items)} action events.")
     api_items = apply_filter(api_items, config.get("filter"))
 
-    # 6. Detect changes
-    db_items = get_all_items()
-    new_items, changed_items, deleted_ids = detect_changes(api_items, db_items)
+    process_stream(
+        label="Assignments/Quizzes",
+        api_items=api_items,
+        db_items=get_all_items(),
+        course_map=course_map,
+        insert_fn=insert_items,
+        update_fn=update_item,
+        delete_fn=delete_items,
+        args=args,
+        bot_token=bot_token,
+        chat_id=chat_id,
+        now=now,
+    )
 
-    print(f"[*] Changes: {len(new_items)} new, {len(changed_items)} changed, "
-          f"{len(deleted_ids)} removed.")
+    # 6. Fetch forum discussions (HTML scrape + AJAX, per moodle.py docs)
+    print("[*] Fetching forum discussions...")
+    forum_items = get_forum_discussions(session, sesskey, base_url, course_ids)
+    print(f"[*] Found {len(forum_items)} forum discussions.")
+    forum_items = apply_filter(forum_items, config.get("filter"))
 
-    if args.dry_run:
-        print("[*] Dry run — skipping database writes.")
-
-    now = int(time.time())
-
-    # 7. Handle new items
-    if new_items:
-        if not args.dry_run:
-            insert_items(new_items)
-        if not args.initct:
-            if args.tgbot:
-                for item in new_items:
-                    course = course_map.get(item["belongs_to"])
-                    if course:
-                        try:
-                            notify_new_item(bot_token, chat_id, item, course)
-                        except Exception as e:
-                            print(f"[WARN] Failed to send notification: {e}")
-            else:
-                print(f"\n[*] New items ({len(new_items)}):")
-                print(f"  {'Deadline':^20s} | {'Type':^6s} | {'Course':^12s} | Title")
-                print("  " + "-" * 78)
-                for item in new_items:
-                    course = course_map.get(item["belongs_to"], {})
-                    shortname = course.get("course_shortname", "?")
-                    if item.get("deadline"):
-                        dl = datetime.fromtimestamp(item["deadline"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-                        days_left = (item["deadline"] - now) / 86400
-                        dl_str = f"{dl} ({days_left:.1f}d)"
-                    else:
-                        dl_str = "No deadline"
-                    print(f"  {dl_str:<20s} | {item['item_type']:^6s} | {shortname:^12s} | {item['item_title']}")
-
-    # 8. Handle changed items
-    if changed_items:
-        if not args.dry_run:
-            for item, changes in changed_items:
-                update_item(item)
-        if not args.initct:
-            if args.tgbot:
-                for item, changes in changed_items:
-                    course = course_map.get(item["belongs_to"])
-                    if course:
-                        try:
-                            notify_changed_item(bot_token, chat_id, item, course, changes)
-                        except Exception as e:
-                            print(f"[WARN] Failed to send notification: {e}")
-            else:
-                print(f"\n[*] Changed items ({len(changed_items)}):")
-                print(f"  {'Deadline':^20s} | {'Type':^6s} | {'Course':^12s} | {'Title':<30s} | Changes")
-                print("  " + "-" * 100)
-                for item, changes in changed_items:
-                    course = course_map.get(item["belongs_to"], {})
-                    shortname = course.get("course_shortname", "?")
-                    if item.get("deadline"):
-                        dl = datetime.fromtimestamp(item["deadline"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-                        days_left = (item["deadline"] - now) / 86400
-                        dl_str = f"{dl} ({days_left:.1f}d)"
-                    else:
-                        dl_str = "No deadline"
-                    print(f"  {dl_str:<20s} | {item['item_type']:^6s} | {shortname:^12s} | {item['item_title']:<30s} | {', '.join(changes)}")
-
-    # 9. Handle deleted items
-    if deleted_ids:
-        if not args.dry_run:
-            delete_items(deleted_ids)
+    process_stream(
+        label="Forum discussions",
+        api_items=forum_items,
+        db_items=get_all_forum_items(),
+        course_map=course_map,
+        insert_fn=insert_forum_items,
+        update_fn=update_forum_item,
+        delete_fn=delete_forum_items,
+        args=args,
+        bot_token=bot_token,
+        chat_id=chat_id,
+        now=now,
+    )
 
     print("[*] Done.")
+
+
+def process_stream(label, api_items, db_items, course_map,
+                   insert_fn, update_fn, delete_fn,
+                   args, bot_token, chat_id, now):
+    """Detect, persist, and notify for one stream of items.
+
+    Both Assignment/Quiz and Forum streams use identical new/changed/deleted
+    logic; only the item_body field (forum only) is excluded from comparison
+    by virtue of detect_changes comparing just item_title and deadline.
+    """
+    new_items, changed_items, deleted_ids = detect_changes(api_items, db_items)
+
+    print(f"[*] {label}: {len(new_items)} new, "
+          f"{len(changed_items)} changed, {len(deleted_ids)} removed.")
+
+    if args.dry_run:
+        print(f"[*] Dry run — skipping database writes for {label}.")
+
+    if new_items:
+        if not args.dry_run:
+            insert_fn(new_items)
+        if not args.initct:
+            _report_new(label, new_items, course_map, args, bot_token, chat_id, now)
+
+    if changed_items:
+        if not args.dry_run:
+            for item, _changes in changed_items:
+                update_fn(item)
+        if not args.initct:
+            _report_changed(label, changed_items, course_map, args,
+                            bot_token, chat_id, now)
+
+    if deleted_ids and not args.dry_run:
+        delete_fn(deleted_ids)
+
+
+def _fmt_deadline(item: dict, now: int) -> str:
+    ts = item.get("deadline")
+    if not ts:
+        return "No deadline"
+    dl = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+    days = (ts - now) / 86400
+    return f"{dl} ({days:+.1f}d)"
+
+
+def _report_new(label, new_items, course_map, args, bot_token, chat_id, now):
+    if args.tgbot:
+        for item in new_items:
+            course = course_map.get(item["belongs_to"])
+            if course:
+                try:
+                    notify_new_item(bot_token, chat_id, item, course)
+                except Exception as e:
+                    print(f"[WARN] Failed to send notification: {e}")
+        return
+    print(f"\n[*] {label} — new ({len(new_items)}):")
+    print(f"  {'Date':^22s} | {'Type':^6s} | {'Course':^12s} | Title")
+    print("  " + "-" * 78)
+    for item in new_items:
+        course = course_map.get(item["belongs_to"], {})
+        shortname = course.get("course_shortname", "?")
+        print(f"  {_fmt_deadline(item, now):<22s} | "
+              f"{item['item_type']:^6s} | {shortname:^12s} | {item['item_title']}")
+
+
+def _report_changed(label, changed_items, course_map, args, bot_token, chat_id, now):
+    if args.tgbot:
+        for item, changes in changed_items:
+            course = course_map.get(item["belongs_to"])
+            if course:
+                try:
+                    notify_changed_item(bot_token, chat_id, item, course, changes)
+                except Exception as e:
+                    print(f"[WARN] Failed to send notification: {e}")
+        return
+    print(f"\n[*] {label} — changed ({len(changed_items)}):")
+    print(f"  {'Date':^22s} | {'Type':^6s} | {'Course':^12s} | "
+          f"{'Title':<30s} | Changes")
+    print("  " + "-" * 100)
+    for item, changes in changed_items:
+        course = course_map.get(item["belongs_to"], {})
+        shortname = course.get("course_shortname", "?")
+        print(f"  {_fmt_deadline(item, now):<22s} | "
+              f"{item['item_type']:^6s} | {shortname:^12s} | "
+              f"{item['item_title']:<30s} | {', '.join(changes)}")
 
 
 if __name__ == "__main__":

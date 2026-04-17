@@ -1,6 +1,18 @@
 # UKMFolioPuller
 
-Monitor UKMFolio (Moodle) for new/changed assignments and quizzes, get notified via Telegram.
+Monitor UKMFolio (Moodle) for new/changed assignments, quizzes, and forum discussions (e.g. class announcements), and get notified via Telegram.
+
+## What gets monitored
+
+| Source | How it is pulled | What triggers a notification |
+| ------ | ---------------- | ---------------------------- |
+| Assignments / quizzes | Moodle AJAX `core_calendar_get_action_events_by_courses` | New item, or changed title / deadline |
+| Forum discussions (announcements, replacement-class posts, etc.) | HTML scrape of course and forum pages + AJAX `mod_forum_get_discussion_posts` for the root post | New discussion, or changed subject / post-creation timestamp |
+
+Forum **body text** is fetched and stored (in the `item_body` column of
+`tbl_forum_discussions`) but is intentionally excluded from change detection —
+so when a teacher edits the wording of an existing announcement you will not
+be re-notified. New discussions and subject-line edits still alert.
 
 ## Setup
 
@@ -36,8 +48,10 @@ Monitor UKMFolio (Moodle) for new/changed assignments and quizzes, get notified 
 
    The `filter` block controls which items (by `item_title`) are allowed
    through to change detection and notification. Both `--tgbot` runs and
-   `--check` runs apply the same filter. Whitelist/blacklist entries are
-   **regular expressions** (a plain substring works too).
+   `--check` runs apply the same filter. The filter runs against the title
+   of assignments/quizzes and of forum discussions alike (forum body text
+   is never matched). Whitelist/blacklist entries are **regular expressions**
+   (a plain substring works too).
 
    Modes:
 
@@ -62,15 +76,27 @@ Monitor UKMFolio (Moodle) for new/changed assignments and quizzes, get notified 
 ## Usage
 
 ```bash
-# First run — populate database without sending notifications
+# First run — populate database (both assignments/quizzes AND forum
+# discussions) without sending notifications
 python main.py --initct
 
-# Normal run — detect changes and notify via Telegram
+# Normal run — detect changes and print to stdout
 python main.py
 
-# Check upcoming deadlines (within 7 days)
-python main.py check
+# Normal run with Telegram notifications
+python main.py --tgbot
+
+# Check upcoming deadlines (within 7 days); forum posts are excluded from
+# this view because their stored date is the post creation time, not a
+# future due date
+python main.py --check
 ```
+
+On the first `--initct` run, expect two "new" batches in the log: one for
+assignments/quizzes (from the calendar AJAX endpoint) and one for forum
+discussions (from the HTML-scrape + per-discussion AJAX pipeline). Forum
+sync adds ~(#courses + #forums + #discussions) HTTP round-trips per run,
+which is fine for a 15–30 minute cron cadence.
 
 ## Scheduled Execution
 
