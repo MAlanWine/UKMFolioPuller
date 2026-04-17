@@ -10,7 +10,7 @@ from db import init_db, upsert_courses, get_all_items, \
     insert_items, update_item, delete_items, \
     get_all_forum_items, insert_forum_items, update_forum_item, \
     delete_forum_items
-from filter import apply_filter
+from filter import apply_filter, parse_listen_field, filter_by_type
 from moodle import get_enrolled_courses, get_action_events, \
     get_forum_discussions
 from notifier import notify_new_item, notify_changed_item, \
@@ -79,6 +79,7 @@ def cmd_check(config: dict, use_tgbot: bool = False):
     course_map = {c["course_id"]: c for c in courses}
     course_ids = list(course_map.keys())
     api_items = get_action_events(session, sesskey, base_url, course_ids)
+    api_items = filter_by_type(api_items, parse_listen_field(config.get("listen_filed")))
     api_items = apply_filter(api_items, config.get("filter"))
 
     now = int(time.time())
@@ -167,45 +168,72 @@ def main():
 
     now = int(time.time())
 
-    # 5. Fetch action events
-    print("[*] Fetching action events (assignments/quizzes)...")
-    api_items = get_action_events(session, sesskey, base_url, course_ids)
-    print(f"[*] Found {len(api_items)} action events.")
-    api_items = apply_filter(api_items, config.get("filter"))
+    # 4.5. Resolve type-level listen filter from config.listen_filed
+    listen_types = parse_listen_field(config.get("listen_filed"))
+    if listen_types is not None:
+        print(f"[*] Listening to types: {sorted(listen_types)}")
 
-    process_stream(
-        label="Assignments/Quizzes",
-        api_items=api_items,
-        db_items=get_all_items(),
-        course_map=course_map,
-        insert_fn=insert_items,
-        update_fn=update_item,
-        delete_fn=delete_items,
-        args=args,
-        bot_token=bot_token,
-        chat_id=chat_id,
-        now=now,
+    # 5. Fetch action events (assignments/quizzes) — skip if user listens
+    # only to forum
+    action_types_in_listen = (
+        listen_types is None or bool(listen_types - {"forum"})
     )
+    if action_types_in_listen:
+        print("[*] Fetching action events (assignments/quizzes)...")
+        api_items = get_action_events(session, sesskey, base_url, course_ids)
+        print(f"[*] Found {len(api_items)} action events.")
+        api_items = filter_by_type(api_items, listen_types)
+        api_items = apply_filter(api_items, config.get("filter"))
 
-    # 6. Fetch forum discussions (HTML scrape + AJAX, per moodle.py docs)
-    print("[*] Fetching forum discussions...")
-    forum_items = get_forum_discussions(session, sesskey, base_url, course_ids)
-    print(f"[*] Found {len(forum_items)} forum discussions.")
-    forum_items = apply_filter(forum_items, config.get("filter"))
+        # Restrict the DB view to types currently being listened to so that
+        # items of excluded types (e.g. existing assignments when listen_filed
+        # is ["Quiz"]) are NOT mistaken for deletions.
+        db_items_full = get_all_items()
+        if listen_types is None:
+            db_items = db_items_full
+        else:
+            db_items = {k: v for k, v in db_items_full.items()
+                        if v.get("item_type") in listen_types}
 
-    process_stream(
-        label="Forum discussions",
-        api_items=forum_items,
-        db_items=get_all_forum_items(),
-        course_map=course_map,
-        insert_fn=insert_forum_items,
-        update_fn=update_forum_item,
-        delete_fn=delete_forum_items,
-        args=args,
-        bot_token=bot_token,
-        chat_id=chat_id,
-        now=now,
-    )
+        process_stream(
+            label="Assignments/Quizzes",
+            api_items=api_items,
+            db_items=db_items,
+            course_map=course_map,
+            insert_fn=insert_items,
+            update_fn=update_item,
+            delete_fn=delete_items,
+            args=args,
+            bot_token=bot_token,
+            chat_id=chat_id,
+            now=now,
+        )
+    else:
+        print("[*] Skipping action events (listen_filed excludes Quiz/Assignment).")
+
+    # 6. Fetch forum discussions — skip entirely if user doesn't want Form
+    run_forum = listen_types is None or "forum" in listen_types
+    if run_forum:
+        print("[*] Fetching forum discussions...")
+        forum_items = get_forum_discussions(session, sesskey, base_url, course_ids)
+        print(f"[*] Found {len(forum_items)} forum discussions.")
+        forum_items = apply_filter(forum_items, config.get("filter"))
+
+        process_stream(
+            label="Forum discussions",
+            api_items=forum_items,
+            db_items=get_all_forum_items(),
+            course_map=course_map,
+            insert_fn=insert_forum_items,
+            update_fn=update_forum_item,
+            delete_fn=delete_forum_items,
+            args=args,
+            bot_token=bot_token,
+            chat_id=chat_id,
+            now=now,
+        )
+    else:
+        print("[*] Skipping forum discussions (listen_filed excludes Form).")
 
     print("[*] Done.")
 

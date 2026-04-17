@@ -34,9 +34,13 @@ be re-notified. New discussions and subject-line edits still alert.
            "mode": "Default",
            "whitelist": [],
            "blacklist": []
-       }
+       },
+       "listen_filed": ["Quiz", "Assignment", "Form"]
    }
    ```
+
+   > `listen_filed` is optional — omit it to monitor all three types. See
+   > the "Type filter" subsection below for the full rule set.
 
    ### Telegram targets
 
@@ -72,6 +76,37 @@ be re-notified. New discussions and subject-line edits still alert.
        "blacklist": ["Group\\s*B", "Kelas\\s*2"]
    }
    ```
+
+   ### Type filter (`listen_filed`)
+
+   Optional. Controls **which kinds of items** are monitored at all. A
+   string array; each entry is one of `"Quiz"`, `"Assignment"`, `"Form"`.
+   Excluded streams are not fetched (so excluding `Form` also saves the
+   HTML-scrape round-trips).
+
+   | Config                                            | Behavior                                         |
+   | ------------------------------------------------- | ------------------------------------------------ |
+   | field omitted                                     | monitor everything (default)                     |
+   | `["Quiz", "Assignment", "Form"]`                  | monitor everything (same as default)             |
+   | `["Form"]`                                        | only forum discussions; assignments/quizzes skipped |
+   | `["Quiz", "Assignment"]`                          | only action events; forums skipped               |
+   | `[]` (empty array)                                | falls back to default, emits `[WARN]`            |
+   | not an array (string/object/…)                    | falls back to default, emits `[WARN]`            |
+   | contains typo (e.g. `["Quiz", "Foro"]`)           | the bad entry is ignored with `[WARN]`, the rest applies |
+   | every entry is invalid (e.g. `["Foo", "Bar"]`)    | falls back to default, emits `[WARN]`            |
+
+   All misconfigurations are logged as `[WARN]` lines at the start of the
+   run so silent misbehavior is not possible.
+
+   Example — only care about forum announcements:
+
+   ```json
+   "listen_filed": ["Form"]
+   ```
+
+   Note on switching: excluded types keep their existing rows in the
+   database untouched, so turning a type back on later will NOT re-notify
+   you about already-seen items.
 
 ## Usage
 
