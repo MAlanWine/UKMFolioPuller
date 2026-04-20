@@ -52,23 +52,57 @@ def get_enrolled_courses(session: requests.Session, sesskey: str,
     return courses
 
 
+# Moodle surfaces multiple calendar events per activity (one per eventtype:
+# `due`, `close`, `expectcompletionon`, `gradingdue`, ...). For a student's
+# deadline view we want at most one event per activity, preferring the real
+# deadline over the soft completion marker — otherwise the same assignment
+# shows up twice under its identical activityname.
+_EVENTTYPE_PRIORITY = {
+    "due": 0,
+    "close": 0,
+    "gradingdue": 5,
+    "expectcompletionon": 10,
+}
+
+
+def _event_rank(event: dict) -> int:
+    return _EVENTTYPE_PRIORITY.get(event.get("eventtype", ""), 3)
+
+
 def get_action_events(session: requests.Session, sesskey: str,
                       base_url: str, course_ids: list[int]) -> list[dict]:
-    """Fetch action events (assignment/quiz deadlines) for all courses."""
+    """Fetch action events (assignment/quiz deadlines) for all courses.
+
+    Deduplicates per-activity events so each (modulename, instance) yields
+    at most one item — the event with the most authoritative eventtype.
+    """
     data = _ajax_call(session, sesskey, base_url,
                       "core_calendar_get_action_events_by_courses",
                       {"courseids": course_ids, "timesortfrom": 0})
-    items = []
+
+    chosen: dict[tuple, dict] = {}
+    loose: list[dict] = []
     for group in data["groupedbycourse"]:
         for event in group["events"]:
-            items.append({
-                "item_id": event["id"],
-                "item_type": event.get("modulename", "unknown"),
-                "item_title": event.get("activityname", event.get("name", "")),
-                "deadline": event.get("timestart"),
-                "item_url": event.get("url", ""),
-                "belongs_to": event["course"]["id"],
-            })
+            instance = event.get("instance")
+            if instance is None:
+                loose.append(event)
+                continue
+            key = (event.get("modulename"), instance)
+            prev = chosen.get(key)
+            if prev is None or _event_rank(event) < _event_rank(prev):
+                chosen[key] = event
+
+    items = []
+    for event in list(chosen.values()) + loose:
+        items.append({
+            "item_id": event["id"],
+            "item_type": event.get("modulename", "unknown"),
+            "item_title": event.get("activityname", event.get("name", "")),
+            "deadline": event.get("timestart"),
+            "item_url": event.get("url", ""),
+            "belongs_to": event["course"]["id"],
+        })
     return items
 
 
